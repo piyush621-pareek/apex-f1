@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>APEX F1 — FSP</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body data-page="fsp">
+
+  <header class="navbar">
+    <div class="navbar-inner">
+      <a href="dashboard.html" class="brand">
+        <span class="brand-mark"></span>
+        <span class="brand-name">APEX<span class="brand-name-accent">F1</span></span>
+      </a>
+      <button class="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
+      <nav class="nav-links">
+        <a href="dashboard.html" class="nav-link" data-page="dashboard">Dashboard</a>
+        <a href="pitwall.html" class="nav-link" data-page="pitwall">Pit Wall</a>
+        <a href="fsp.html" class="nav-link" data-page="fsp">FSP</a>
+        <a href="manage.html" class="nav-link" data-page="manage">Manage</a>
+      </nav>
+      <div class="season-badge"><span class="season-dot"></span>2026 SEASON</div>
+    </div>
+  </header>
+
+  <main class="page-container">
+    <section class="panel">
+      <h1>Fan Season Predictions</h1>
+      <p class="text-secondary">Pick who takes pole and who wins the race. Submit your prediction before lights out.</p>
+    </section>
+
+    <div class="grid grid-2">
+      <section class="panel">
+        <h2>Make a Prediction</h2>
+        <form id="predict-form">
+          <div class="field">
+            <label for="race">Race</label>
+            <select id="race" required></select>
+          </div>
+          <div class="field">
+            <label for="fan-name">Your Name</label>
+            <input id="fan-name" type="text" placeholder="e.g. Alex" required />
+          </div>
+          <div class="field">
+            <label for="pole">Predicted Pole</label>
+            <select id="pole" required></select>
+          </div>
+          <div class="field">
+            <label for="winner">Predicted Winner</label>
+            <select id="winner" required></select>
+          </div>
+          <button type="submit" class="btn">Submit Prediction</button>
+          <div id="form-msg" style="margin-top:12px;"></div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Predictions for this Race</h2>
+        <div id="predictions"><div class="state-msg">Loading…</div></div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>APEX F1 — F1 Telemetry Analytics · 2026 Season</p>
+  </footer>
+
+  <script src="js/main.js"></script>
+  <script src="js/api.js"></script>
+  <script>
+    const raceSel = document.getElementById('race');
+    const poleSel = document.getElementById('pole');
+    const winnerSel = document.getElementById('winner');
+    const formMsg = document.getElementById('form-msg');
+    const submitBtn = document.querySelector('#predict-form .btn');
+    let editingId = null;         // null = create mode, else editing this prediction
+    let predCache = [];
+
+    async function init() {
+      try {
+        const [races, drivers] = await Promise.all([
+          apiGet(`/races?season=${SEASON}`),
+          apiGet('/drivers'),
+        ]);
+        raceSel.innerHTML = races.map(r => `<option value="${r.id}">R${r.round} — ${r.name}</option>`).join('');
+        const driverOpts = drivers.map(d => `<option value="${d.id}">${d.code} — ${d.fullName}</option>`).join('');
+        poleSel.innerHTML = driverOpts;
+        winnerSel.innerHTML = driverOpts;
+        raceSel.onchange = loadPredictions;
+        if (races.length) loadPredictions();
+      } catch (e) {
+        showState(document.getElementById('predictions'), `Could not load data: ${e.message}`, true);
+      }
+    }
+
+    async function loadPredictions() {
+      const el = document.getElementById('predictions');
+      showState(el, 'Loading…');
+      try {
+        const preds = await apiGet(`/predictions/race/${raceSel.value}`);
+        predCache = preds;
+        if (!preds.length) return showState(el, 'No predictions yet — be the first!');
+        el.innerHTML = `<table class="data-table"><thead><tr>
+          <th>Fan</th><th>Pole</th><th>Winner</th><th class="num">Accuracy</th><th></th>
+          </tr></thead><tbody>${preds.map(p => `<tr>
+            <td>${p.fanName}</td>
+            <td>${(p.predictedPoleDriver && p.predictedPoleDriver.code) || '—'}</td>
+            <td>${(p.predictedWinnerDriver && p.predictedWinnerDriver.code) || '—'}</td>
+            <td class="num">${p.scored && p.accuracyPct != null ? p.accuracyPct.toFixed(0) + '%' : '<span class="badge">pending</span>'}</td>
+            <td class="num" style="white-space:nowrap">
+              <button class="btn secondary" style="padding:5px 10px" onclick="startEdit(${p.id})">Edit</button>
+              <button class="btn secondary" style="padding:5px 10px" onclick="removePrediction(${p.id})">Delete</button>
+            </td>
+          </tr>`).join('')}</tbody></table>`;
+      } catch (e) { showState(el, `Could not load predictions: ${e.message}`, true); }
+    }
+
+    window.startEdit = (id) => {
+      const p = predCache.find(x => x.id === id);
+      if (!p) return;
+      editingId = id;
+      document.getElementById('fan-name').value = p.fanName;
+      if (p.predictedPoleDriver) poleSel.value = p.predictedPoleDriver.id;
+      if (p.predictedWinnerDriver) winnerSel.value = p.predictedWinnerDriver.id;
+      submitBtn.textContent = 'Update Prediction';
+      raceSel.disabled = true;   // a prediction stays with its race
+      formMsg.innerHTML = `<span class="text-secondary">Editing ${p.fanName}'s pick — <a href="#" onclick="cancelEdit();return false;">cancel</a></span>`;
+    };
+
+    window.cancelEdit = () => {
+      editingId = null;
+      submitBtn.textContent = 'Submit Prediction';
+      raceSel.disabled = false;
+      document.getElementById('fan-name').value = '';
+      formMsg.innerHTML = '';
+    };
+
+    window.removePrediction = async (id) => {
+      if (!confirm('Delete this prediction?')) return;
+      try {
+        await apiDelete(`/predictions/${id}`);
+        if (editingId === id) cancelEdit();
+        loadPredictions();
+      } catch (err) {
+        formMsg.innerHTML = `<span style="color:var(--accent-red)">Error: ${err.message}</span>`;
+      }
+    };
+
+    document.getElementById('predict-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      formMsg.innerHTML = '';
+      const payload = {
+        fanName: document.getElementById('fan-name').value.trim(),
+        predictedPoleDriverId: Number(poleSel.value),
+        predictedWinnerDriverId: Number(winnerSel.value),
+      };
+      try {
+        if (editingId) {
+          await apiPut(`/predictions/${editingId}`, payload);
+          formMsg.innerHTML = `<span style="color:var(--accent-teal)">Prediction updated!</span>`;
+          cancelEdit();
+        } else {
+          await apiPost(`/predictions/race/${raceSel.value}`, payload);
+          formMsg.innerHTML = `<span style="color:var(--accent-teal)">Prediction submitted!</span>`;
+          document.getElementById('fan-name').value = '';
+        }
+        loadPredictions();
+      } catch (err) {
+        formMsg.innerHTML = `<span style="color:var(--accent-red)">Error: ${err.message}</span>`;
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

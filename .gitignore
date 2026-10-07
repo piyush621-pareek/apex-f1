@@ -1,0 +1,18 @@
+# ===== Build output =====
+target/
+*.class
+
+# ===== IDE =====
+.idea/
+*.iml
+# (keeping .vscode/ so teammates get the Java/Maven setup)
+
+# ===== OS / misc =====
+Thumbs.db
+.DS_Store
+
+# ===== Logs =====
+*.log
+
+# ===== Node (doc generator, if ever copied in) =====
+node_modules/

@@ -1,0 +1,13 @@
+{
+  "java.jdt.ls.java.home": "D:\\AOOPS Project\\.tools\\jdk-17.0.20.1+1",
+  "java.configuration.runtimes": [
+    {
+      "name": "JavaSE-17",
+      "path": "D:\\AOOPS Project\\.tools\\jdk-17.0.20.1+1",
+      "default": true
+    }
+  ],
+  "maven.executable.path": "D:\\AOOPS Project\\.tools\\apache-maven-3.9.9\\bin\\mvn.cmd",
+  "java.import.maven.enabled": true,
+  "java.configuration.updateBuildConfiguration": "automatic"
+}

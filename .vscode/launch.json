@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "Run APEX F1",
+      "request": "launch",
+      "mainClass": "com.apexf1.backend.BackendApplication",
+      "projectName": "backend"
+    }
+  ]
+}
