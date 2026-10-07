@@ -18,6 +18,8 @@ A single **Spring Boot** application serves both the web frontend and a REST API
 
 ## 🧰 Technology Stack
 
+**Java 17 · Spring Boot 3.3 (Spring Web MVC) · Spring Data JPA + Hibernate · MySQL 8 · java.util.concurrent (multithreading) · Lombok · Maven · HTML5 / CSS3 / JavaScript (Fetch API)**
+
 | Layer | Technology |
 |---|---|
 | Language | Java 17 (LTS) |
