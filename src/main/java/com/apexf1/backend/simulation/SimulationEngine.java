@@ -3,13 +3,17 @@ package com.apexf1.backend.simulation;
 import com.apexf1.backend.model.Circuit;
 import com.apexf1.backend.model.Driver;
 import com.apexf1.backend.model.Race;
+import com.apexf1.backend.model.SimulationResult;
+import com.apexf1.backend.model.SimulationResultEntry;
 import com.apexf1.backend.repository.DriverRepository;
+import com.apexf1.backend.repository.SimulationResultRepository;
 import com.apexf1.backend.repository.RaceRepository;
 import com.apexf1.backend.simulation.dto.CarSnapshot;
 import com.apexf1.backend.simulation.dto.SimulationSnapshot;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -31,22 +35,39 @@ public class SimulationEngine {
 
     private final RaceRepository raceRepository;
     private final DriverRepository driverRepository;
+    private final SimulationWebSocketHandler wsHandler;
 
     private final ExecutorService pool = Executors.newCachedThreadPool();
     private final ConcurrentHashMap<Long, RaceSimulation> simulations = new ConcurrentHashMap<>();
     private final AtomicLong idSeq = new AtomicLong(1000);
 
-    public SimulationEngine(RaceRepository raceRepository, DriverRepository driverRepository) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public SimulationEngine(RaceRepository raceRepository,
+                            DriverRepository driverRepository,
+                            SimulationWebSocketHandler wsHandler) {
         this.raceRepository = raceRepository;
         this.driverRepository = driverRepository;
+        this.wsHandler = wsHandler;
+    }
+
+    private SimulationResultRepository resultRepository;
+
+    /** Optional: when present, finished races are saved to MySQL. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setResultRepository(SimulationResultRepository resultRepository) {
+        this.resultRepository = resultRepository;
+    }
+
+    public SimulationEngine(RaceRepository raceRepository, DriverRepository driverRepository) {
+        this(raceRepository, driverRepository, null);
     }
 
     /**
      * Start a new simulation for a race. All drivers in the DB take part.
      *
-     * @param raceId    race to simulate (for circuit length / name)
-     * @param lapsOrNull override lap count (defaults to the circuit's, capped)
-     * @param timeScaleOrNull model-seconds per real-second (defaults to 20x)
+     * @param raceId          race to simulate (for circuit length / name / laps)
+     * @param lapsOrNull      override lap count (0 or null = full circuit lap count)
+     * @param timeScaleOrNull model-seconds per real-second (defaults to 5x)
      */
     public SimulationSnapshot start(Long raceId, Integer lapsOrNull, Double timeScaleOrNull) {
         Race race = raceRepository.findById(raceId)
@@ -58,30 +79,52 @@ public class SimulationEngine {
         }
 
         Circuit circuit = race.getCircuit();
-        double lapLengthM = (circuit != null && circuit.getLengthKm() != null)
+        double lapLengthM = (circuit != null && circuit.getLengthKm() != null && circuit.getLengthKm() > 0)
                 ? circuit.getLengthKm() * 1000.0 : 5000.0;
-        int circuitLaps = (circuit != null && circuit.getTotalLaps() != null)
-                ? circuit.getTotalLaps() : 10;
-        int totalLaps = (lapsOrNull != null && lapsOrNull > 0) ? lapsOrNull : Math.min(circuitLaps, 10);
-        double timeScale = (timeScaleOrNull != null && timeScaleOrNull > 0) ? timeScaleOrNull : 20.0;
+        int circuitLaps = (circuit != null && circuit.getTotalLaps() != null && circuit.getTotalLaps() > 0)
+                ? circuit.getTotalLaps() : 50;
+        int totalLaps = (lapsOrNull != null && lapsOrNull > 0) ? lapsOrNull : circuitLaps;
+        double timeScale = (timeScaleOrNull != null && timeScaleOrNull > 0) ? timeScaleOrNull : 5.0;
 
-        // Build each car's starting state with a small, deterministic pace spread.
+        long simId = idSeq.incrementAndGet();
+        double baseLapSec = referenceLapSec(circuit, lapLengthM);
+
+        // Build each car's starting state with realistic 2026 team/driver pace and staggered strategy.
         List<CarSimState> cars = new ArrayList<>();
         for (Driver d : drivers) {
-            Random seedRnd = new Random(d.getId() == null ? 0 : d.getId());
-            double basePace = 205.0 + seedRnd.nextDouble() * 12.0;   // ~205-217 km/h
+            long dId = d.getId() == null ? 0L : d.getId();
+            Random seedRnd = new Random(dId * 997L + raceId * 131L + simId);
+            String teamShort = (d.getTeam() != null && d.getTeam().getShortName() != null)
+                    ? d.getTeam().getShortName() : "";
+            double gapSec = teamPaceSec(teamShort) + driverOffsetSec(d.getCode())
+                    + (seedRnd.nextDouble() - 0.5) * 0.55;
+            double driverLapSec = Math.max(55.0, baseLapSec + gapSec);
+            double basePaceKph = (lapLengthM / 1000.0) / (driverLapSec / 3600.0);
+
+            String startCompound = seedRnd.nextDouble() < 0.45 ? "SOFT" : "MEDIUM";
+            String nextCompound = "SOFT".equals(startCompound)
+                    ? (seedRnd.nextDouble() < 0.65 ? "HARD" : "MEDIUM")
+                    : "HARD";
+            int minPit = Math.max(2, (int) Math.round(totalLaps * 0.34));
+            int maxPit = Math.max(minPit + 1, (int) Math.round(totalLaps * 0.62));
+            int plannedPitLap = Math.min(totalLaps - 1, minPit + seedRnd.nextInt(Math.max(1, maxPit - minPit + 1)));
+            if (plannedPitLap < 2) plannedPitLap = Math.max(2, totalLaps / 2);
+
             String team = d.getTeam() != null ? d.getTeam().getName() : "—";
             String color = d.getTeam() != null ? d.getTeam().getColorHex() : "#888888";
             cars.add(new CarSimState(
-                    d.getId(), d.getCode(), d.getFullName(), team, color, basePace));
+                    dId, d.getCode(), d.getFullName(), team, color,
+                    basePaceKph, startCompound, plannedPitLap, nextCompound));
         }
 
-        long simId = idSeq.incrementAndGet();
         RaceSimulation sim = new RaceSimulation(
                 simId, raceId, race.getName(), totalLaps, lapLengthM, timeScale, cars);
 
-        // Observer pattern in action: log each completed lap to the console.
+        // Observer pattern in action: log each completed lap to console + stream live over WebSocket.
         sim.addObserver(new LoggingTelemetryObserver());
+        if (wsHandler != null) {
+            sim.addObserver(new WebSocketTelemetryObserver(this, wsHandler));
+        }
 
         simulations.put(simId, sim);
 
@@ -89,13 +132,14 @@ public class SimulationEngine {
         // flips the status to FINISHED once every car has completed.
         PaceStrategy strategy = new BalancedPaceStrategy();
         for (CarSimState car : cars) {
-            long seed = car.getDriverId() * 31 + simId;
+            long seed = car.getDriverId() * 31 + simId * 17;
             pool.submit(new CarRunner(sim, car, strategy, seed));
         }
         pool.submit(() -> {
             try {
                 sim.awaitAllCars();
                 sim.markFinished();
+                persistResult(simId);
                 sim.notifyFinished();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -103,6 +147,96 @@ public class SimulationEngine {
         });
 
         return snapshot(simId);
+    }
+
+    private static double referenceLapSec(Circuit circuit, double lapLengthM) {
+        if (circuit != null && circuit.getName() != null) {
+            String n = circuit.getName().toLowerCase();
+            if (n.contains("bahrain")) return 92.4;
+            if (n.contains("jeddah")) return 90.8;
+            if (n.contains("suzuka")) return 90.5;
+            if (n.contains("monaco")) return 73.2;
+            if (n.contains("barcelona")) return 76.5;
+            if (n.contains("silverstone")) return 87.5;
+            if (n.contains("spa")) return 104.5;
+            if (n.contains("monza")) return 81.2;
+        }
+        // Fallback for custom circuits (~215 km/h average F1 race speed)
+        return (lapLengthM / 1000.0) / (215.0 / 3600.0);
+    }
+
+    private static double teamPaceSec(String shortName) {
+        switch (shortName) {
+            case "MER": return 0.00;
+            case "MCL": return 0.08;
+            case "FER": return 0.12;
+            case "RBR": return 0.18;
+            case "WIL": return 0.48;
+            case "RB":  return 0.58;
+            case "ALP": return 0.68;
+            case "HAS": return 0.72;
+            case "AST": return 0.82;
+            case "AUD": return 0.90;
+            case "CAD": return 1.15;
+            default:    return 0.75;
+        }
+    }
+
+    private static double driverOffsetSec(String code) {
+        if (code == null) return 0.0;
+        switch (code) {
+            case "VER": case "ANT": case "LEC": case "NOR": return -0.14;
+            case "RUS": case "HAM": case "PIA": case "ALO": return -0.08;
+            case "SAI": case "GAS": case "ALB": case "LAW": case "HUL": return 0.00;
+            default: return 0.10;
+        }
+    }
+
+    /** Save the final classification of a finished race (one row per car). */
+    private void persistResult(long simId) {
+        if (resultRepository == null) return;
+        try {
+            SimulationSnapshot snap = snapshot(simId);
+            SimulationResult result = new SimulationResult();
+            result.setSimulationId(snap.simulationId);
+            result.setRaceId(snap.raceId);
+            result.setRaceName(snap.raceName);
+            result.setTotalLaps(snap.totalLaps);
+            result.setTimeScale(snap.timeScale);
+            result.setFinishedAt(LocalDateTime.now());
+            List<SimulationResultEntry> entries = new ArrayList<>();
+            for (CarSnapshot c : snap.cars) {
+                SimulationResultEntry e = new SimulationResultEntry();
+                e.setResult(result);
+                e.setPosition(c.position);
+                e.setDriverId(c.driverId);
+                e.setDriverCode(c.driverCode);
+                e.setDriverName(c.driverName);
+                e.setTeamName(c.teamName);
+                e.setFinalLap(c.currentLap);
+                e.setTotalDistanceM(c.totalDistanceM);
+                e.setLastLapTimeMs(c.lastLapTimeMs);
+                entries.add(e);
+            }
+            if (!entries.isEmpty()) {
+                result.setWinnerCode(entries.get(0).getDriverCode());
+                result.setWinnerName(entries.get(0).getDriverName());
+            }
+            result.setEntries(entries);
+            resultRepository.save(result);
+        } catch (RuntimeException ex) {
+            System.err.println("Could not save simulation " + simId + ": " + ex.getMessage());
+        }
+    }
+
+    public List<SimulationResult> listResults() {
+        return resultRepository == null ? List.of() : resultRepository.findAllByOrderByFinishedAtDesc();
+    }
+
+    public SimulationResult getResult(Long id) {
+        if (resultRepository == null) throw new NoSuchElementException("Results not available");
+        return resultRepository.findById(id)
+                .orElseThrow(() -> new NoSuchElementException("Simulation result " + id + " not found"));
     }
 
     /** Stop a running simulation (cooperative: car threads exit on next tick). */

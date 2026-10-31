@@ -38,7 +38,9 @@ public class TeamService {
         existing.setShortName(incoming.getShortName());
         existing.setNationality(incoming.getNationality());
         existing.setColorHex(incoming.getColorHex());
-        existing.setLogoUrl(incoming.getLogoUrl());
+        if (incoming.getLogoUrl() != null && !incoming.getLogoUrl().isBlank()) {
+            existing.setLogoUrl(incoming.getLogoUrl());
+        }
         return teamRepository.save(existing);
     }
 

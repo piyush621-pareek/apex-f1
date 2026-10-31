@@ -63,3 +63,19 @@ function formatLapTime(ms) {
 function showState(el, message, isError = false) {
   el.innerHTML = `<div class="state-msg${isError ? ' error' : ''}">${message}</div>`;
 }
+
+/** Escape text before putting it into innerHTML (prevents HTML/script injection). */
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Format seconds (e.g. 76.601) as m:ss.mmm — used on chart axes. */
+function formatSeconds(sec) {
+  if (sec == null || isNaN(sec)) return '—';
+  return formatLapTime(Math.round(sec * 1000));
+}

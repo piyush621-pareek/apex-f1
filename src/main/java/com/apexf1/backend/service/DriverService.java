@@ -32,6 +32,11 @@ public class DriverService {
     /** CREATE */
     public Driver create(Driver driver) {
         driver.setId(null);                 // ignore any client-supplied id
+        if (driver.getHeadshotUrl() == null || driver.getHeadshotUrl().isBlank()) {
+            if (driver.getCode() != null && !driver.getCode().isBlank()) {
+                driver.setHeadshotUrl("/img/drivers/" + driver.getCode().trim().toLowerCase() + ".png");
+            }
+        }
         driver.setTeam(resolveTeam(driver.getTeam()));
         return driverRepository.save(driver);
     }
@@ -43,7 +48,9 @@ public class DriverService {
         existing.setFullName(incoming.getFullName());
         existing.setCarNumber(incoming.getCarNumber());
         existing.setNationality(incoming.getNationality());
-        existing.setHeadshotUrl(incoming.getHeadshotUrl());
+        if (incoming.getHeadshotUrl() != null && !incoming.getHeadshotUrl().isBlank()) {
+            existing.setHeadshotUrl(incoming.getHeadshotUrl());
+        }
         existing.setTeam(resolveTeam(incoming.getTeam()));
         return driverRepository.save(existing);
     }

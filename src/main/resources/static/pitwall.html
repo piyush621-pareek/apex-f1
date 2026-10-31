@@ -20,6 +20,7 @@
       <nav class="nav-links">
         <a href="dashboard.html" class="nav-link" data-page="dashboard">Dashboard</a>
         <a href="pitwall.html" class="nav-link" data-page="pitwall">Pit Wall</a>
+        <a href="race.html" class="nav-link" data-page="race">Race Sim</a>
         <a href="fsp.html" class="nav-link" data-page="fsp">FSP</a>
         <a href="manage.html" class="nav-link" data-page="manage">Manage</a>
       </nav>
@@ -30,7 +31,7 @@
   <main class="page-container">
     <section class="panel">
       <h1>Pit Wall</h1>
-      <p class="text-secondary">Lap times, telemetry and weather for each session of a race weekend.</p>
+      <p class="text-secondary">Session classification, tyre strategy, lap-time analysis and car telemetry for each session of a race weekend.</p>
       <div class="controls">
         <div class="field">
           <label for="race-select">Race</label>
@@ -41,22 +42,57 @@
           <select id="session-select"></select>
         </div>
         <div class="field">
-          <label for="driver-select">Driver (telemetry)</label>
+          <label for="driver-select">Driver</label>
           <select id="driver-select"></select>
         </div>
+        <div class="field">
+          <label for="compare-select">Compare telemetry with</label>
+          <select id="compare-select"></select>
+        </div>
       </div>
-      <div id="track-wrap" style="margin:16px 0;"></div>
-      <div id="weather-row" class="grid grid-2"></div>
+      <div class="grid grid-2">
+        <div id="track-wrap"></div>
+        <div>
+          <div id="weather-row" class="stat-grid"></div>
+          <div id="driver-summary" class="stat-grid" style="margin-top:12px;"></div>
+        </div>
+      </div>
     </section>
 
     <section class="panel">
-      <h2>Lap Times</h2>
-      <div id="laptimes"><div class="state-msg">Select a session…</div></div>
+      <h2>Session Classification</h2>
+      <div id="classification"><div class="state-msg">Select a session…</div></div>
     </section>
 
     <section class="panel">
-      <h2>Telemetry</h2>
-      <div id="telemetry"><div class="state-msg">Select a driver…</div></div>
+      <h2>Tyre Strategy — Stint Analysis</h2>
+      <p class="text-secondary" style="margin-top:-4px;">Each bar is one stint on one set of tyres; the number is how many laps it lasted. Hover a bar for details.</p>
+      <div id="stints"><div class="state-msg">Select a session…</div></div>
+    </section>
+
+    <section class="panel">
+      <h2>Lap Analysis</h2>
+      <div class="chart-block"><h3>Lap time (pit &amp; first laps excluded)</h3><div id="chart-laptime"></div></div>
+      <div class="chart-block"><h3>Race position by lap</h3><div id="chart-position"></div></div>
+    </section>
+
+    <section class="panel">
+      <h2>Car Telemetry</h2>
+      <div class="controls" style="margin-bottom:8px;">
+        <div class="field">
+          <label for="lap-select">Lap</label>
+          <select id="lap-select"></select>
+        </div>
+      </div>
+      <div class="chart-block"><h3>Speed</h3><div id="chart-speed"></div></div>
+      <div class="chart-block"><h3>Throttle</h3><div id="chart-throttle"></div></div>
+      <div class="chart-block"><h3>Brake</h3><div id="chart-brake"></div></div>
+      <div class="chart-block"><h3>Gear</h3><div id="chart-gear"></div></div>
+      <div class="chart-block"><h3>Engine RPM</h3><div id="chart-rpm"></div></div>
+      <details class="chart-block">
+        <summary class="text-secondary" style="cursor:pointer;">Show raw telemetry table</summary>
+        <div id="telemetry" style="margin-top:10px;"></div>
+      </details>
     </section>
   </main>
 
@@ -66,38 +102,59 @@
 
   <script src="js/main.js"></script>
   <script src="js/api.js"></script>
+  <script src="js/charts.js"></script>
   <script>
     const raceSel = document.getElementById('race-select');
     const sessionSel = document.getElementById('session-select');
     const driverSel = document.getElementById('driver-select');
+    const compareSel = document.getElementById('compare-select');
+    const lapSel = document.getElementById('lap-select');
 
     let racesCache = [];
+    let driversCache = [];
+    let sessionsCache = [];
+    const lapsBySession = {};        // sessionId -> every lap of every driver
+    const telemetryCache = {};       // "sessionId:driverId" -> telemetry points
+    let currentLaps = [];
 
+    const $ = (id) => document.getElementById(id);
+    const driverById = (id) => driversCache.find((d) => String(d.id) === String(id));
+    const teamColor = (d) => (d && d.team && d.team.colorHex) || '#e10600';
+    const currentSession = () => sessionsCache.find((s) => String(s.id) === String(sessionSel.value));
+    const isRace = () => { const s = currentSession(); return !!s && s.type === 'RACE'; };
+    const cmpDot = (c) => `<span class="cmp-dot" title="${c}" style="background:${COMPOUND_COLORS[c] || '#888'}"></span>`;
+
+    /* ---------- track map ---------- */
     function showTrack() {
-      const r = racesCache.find(x => String(x.id) === String(raceSel.value));
-      const wrap = document.getElementById('track-wrap');
+      const r = racesCache.find((x) => String(x.id) === String(raceSel.value));
+      const wrap = $('track-wrap');
       const c = r && r.circuit;
       if (c && c.mapImageUrl) {
-        wrap.innerHTML = `<img src="${c.mapImageUrl}" alt="${c.name}" class="track-map">
+        const mapUrl = c.mapImageUrl.replace(/\.png$/i, '.svg');
+        wrap.innerHTML = `<img src="${escapeHtml(mapUrl)}" alt="${escapeHtml(c.name)}" class="track-map">
           <div class="text-secondary" style="margin-top:6px;font-size:0.85rem;">
-            ${c.name} · ${c.city || ''}${c.country ? ', ' + c.country : ''} · ${c.lengthKm ?? '—'} km · ${c.totalLaps ?? '—'} laps</div>`;
+            ${escapeHtml(c.name)} · ${escapeHtml(c.city || '')}${c.country ? ', ' + escapeHtml(c.country) : ''} · ${c.lengthKm ?? '—'} km · ${c.totalLaps ?? '—'} laps</div>`;
       } else {
         wrap.innerHTML = '';
       }
     }
 
+    /* ---------- init ---------- */
     async function init() {
       try {
-        const [races, drivers] = await Promise.all([
-          apiGet(`/races?season=${SEASON}`),
-          apiGet('/drivers'),
-        ]);
+        const [races, drivers] = await Promise.all([apiGet(`/races?season=${SEASON}`), apiGet('/drivers')]);
         racesCache = races;
-        raceSel.innerHTML = races.map(r => `<option value="${r.id}">R${r.round} — ${r.name}</option>`).join('');
-        driverSel.innerHTML = drivers.map(d => `<option value="${d.id}">${d.code} — ${d.fullName}</option>`).join('');
+        driversCache = drivers;
+        raceSel.innerHTML = races.map((r) => `<option value="${r.id}">R${r.round} — ${escapeHtml(r.name)}</option>`).join('');
+        const opts = drivers.map((d) => `<option value="${d.id}">${escapeHtml(d.code)} — ${escapeHtml(d.fullName)}</option>`).join('');
+        driverSel.innerHTML = opts;
+        compareSel.innerHTML = '<option value="">None</option>' + opts;
+
         raceSel.onchange = () => { showTrack(); loadSessions(); };
-        sessionSel.onchange = () => { loadLapTimes(); loadWeather(); };
-        driverSel.onchange = loadTelemetry;
+        sessionSel.onchange = loadSession;
+        driverSel.onchange = () => { renderDriverViews(); loadTelemetry(); };
+        compareSel.onchange = renderTelemetry;
+        lapSel.onchange = renderTelemetry;
 
         // Optional deep-link: pitwall.html?raceId=&sessionId=&driverId=
         const params = new URLSearchParams(location.search);
@@ -106,70 +163,187 @@
 
         if (races.length) {
           showTrack();
-          await loadSessions();
-          if (params.get('sessionId')) {
-            sessionSel.value = params.get('sessionId');
-            loadLapTimes(); loadWeather();
-          }
-          if (params.get('driverId')) { driverSel.value = params.get('driverId'); loadTelemetry(); }
+          await loadSessions(params.get('sessionId'));
         }
       } catch (e) {
-        showState(document.getElementById('laptimes'), `Could not load races: ${e.message}`, true);
+        showState($('classification'), `Could not load races: ${escapeHtml(e.message)}`, true);
       }
     }
 
-    async function loadSessions() {
-      const sessions = await apiGet(`/races/${raceSel.value}/sessions`);
-      sessionSel.innerHTML = sessions.map(s => `<option value="${s.id}">${s.type}</option>`).join('');
-      if (sessions.length) { loadLapTimes(); loadWeather(); loadTelemetry(); }
-      else {
-        showState(document.getElementById('laptimes'), 'No sessions for this race.');
-        showState(document.getElementById('telemetry'), 'No sessions for this race.');
+    function clearSessionPanels(message) {
+      ['classification', 'stints', 'chart-laptime', 'chart-position', 'chart-speed', 'chart-throttle',
+       'chart-brake', 'chart-gear', 'chart-rpm', 'telemetry'].forEach((id) => showState($(id), message));
+      $('weather-row').innerHTML = '';
+      $('driver-summary').innerHTML = '';
+      lapSel.innerHTML = '';
+    }
+
+    async function loadSessions(preferredId) {
+      try {
+        sessionsCache = await apiGet(`/races/${raceSel.value}/sessions`);
+      } catch (e) {
+        clearSessionPanels(`Could not load sessions: ${escapeHtml(e.message)}`);
+        return;
+      }
+      if (!sessionsCache.length) {
+        sessionSel.innerHTML = '';
+        clearSessionPanels('No session data yet — this race has not run. Use <a href="race.html" style="text-decoration:underline">Race Sim</a> to simulate it live.');
+        return;
+      }
+      sessionSel.innerHTML = sessionsCache.map((s) => `<option value="${s.id}">${s.type}</option>`).join('');
+      const race = sessionsCache.find((s) => s.type === 'RACE');
+      sessionSel.value = preferredId || (race ? race.id : sessionsCache[0].id);
+      await loadSession();
+    }
+
+    /* ---------- one session ---------- */
+    async function loadSession() {
+      const sid = sessionSel.value;
+      if (!sid) return;
+      showState($('classification'), 'Loading…');
+      try {
+        if (!lapsBySession[sid]) lapsBySession[sid] = await apiGet(`/sessions/${sid}/laptimes`);
+        currentLaps = lapsBySession[sid];
+      } catch (e) {
+        clearSessionPanels(`Could not load lap times: ${escapeHtml(e.message)}`);
+        return;
+      }
+      loadWeather();
+      renderClassification();
+      renderStints();
+      renderDriverViews();
+      loadTelemetry();
+    }
+
+    /** Group every lap row by driver and work out the headline numbers. */
+    function summarise() {
+      const byDriver = new Map();
+      currentLaps.forEach((l) => {
+        if (!l.driver) return;
+        if (!byDriver.has(l.driver.id)) byDriver.set(l.driver.id, []);
+        byDriver.get(l.driver.id).push(l);
+      });
+      const rows = [];
+      byDriver.forEach((laps, id) => {
+        laps.sort((a, b) => a.lapNumber - b.lapNumber);
+        const clean = laps.filter((l) => !l.outlier);
+        const pool = clean.length ? clean : laps;
+        const best = pool.reduce((m, l) => (l.lapTimeMs != null && l.lapTimeMs < m ? l.lapTimeMs : m), Infinity);
+        const stints = [];
+        laps.forEach((l) => {
+          const last = stints[stints.length - 1];
+          if (last && last.compound === l.compound) last.endLap = l.lapNumber;
+          else stints.push({ compound: l.compound, startLap: l.lapNumber, endLap: l.lapNumber });
+        });
+        rows.push({
+          driver: laps[0].driver,
+          laps,
+          best: best === Infinity ? null : best,
+          total: laps.reduce((s, l) => s + (l.lapTimeMs || 0), 0),
+          stops: laps.filter((l) => l.pitLap).length,
+          stints,
+          finish: laps[laps.length - 1].position,
+          avgClean: clean.length ? clean.reduce((s, l) => s + l.lapTimeMs, 0) / clean.length : null,
+        });
+      });
+      return rows;
+    }
+
+    function renderClassification() {
+      const el = $('classification');
+      const rows = summarise();
+      if (!rows.length) return showState(el, 'No lap times recorded for this session.');
+      const race = isRace();
+      if (race) rows.sort((a, b) => (a.finish ?? 99) - (b.finish ?? 99));
+      else rows.sort((a, b) => (a.best ?? Infinity) - (b.best ?? Infinity));
+      const lead = rows[0];
+      el.innerHTML = `<table class="data-table"><thead><tr>
+        <th>Pos</th><th>Driver</th><th>Team</th>
+        <th class="num">${race ? 'Gap' : 'Gap to pole'}</th><th class="num">Best lap</th>
+        ${race ? '<th class="num">Stops</th><th>Strategy</th>' : ''}
+        </tr></thead><tbody>${rows.map((r, i) => {
+          const d = r.driver, t = d.team || {};
+          const gap = i === 0 ? '—' : race
+            ? '+' + ((r.total - lead.total) / 1000).toFixed(3) + 's'
+            : '+' + ((r.best - lead.best) / 1000).toFixed(3) + 's';
+          return `<tr class="${String(d.id) === String(driverSel.value) ? 'row-selected' : ''}" data-driver="${d.id}">
+            <td><span class="pos ${i === 0 ? 'p1' : ''}">${i + 1}</span></td>
+            <td><div class="cell-with-img"><span class="team-dot" style="background:${escapeHtml(t.colorHex || '#888')}"></span><span>${escapeHtml(d.fullName)} <span class="badge">${escapeHtml(d.code)}</span></span></div></td>
+            <td class="text-secondary">${escapeHtml(t.name || '—')}</td>
+            <td class="num">${gap}</td>
+            <td class="num">${formatLapTime(r.best)}</td>
+            ${race ? `<td class="num">${r.stops}</td><td>${r.stints.map((s) => cmpDot(s.compound)).join(' ')}</td>` : ''}
+          </tr>`;
+        }).join('')}</tbody></table>`;
+      el.querySelectorAll('tr[data-driver]').forEach((tr) => {
+        tr.style.cursor = 'pointer';
+        tr.onclick = () => { driverSel.value = tr.dataset.driver; driverSel.onchange(); renderClassification(); };
+      });
+    }
+
+    function renderStints() {
+      const el = $('stints');
+      if (!isRace()) return showState(el, 'Stint analysis is shown for race sessions — pick the RACE session above.');
+      const rows = summarise().sort((a, b) => (a.finish ?? 99) - (b.finish ?? 99));
+      const s = currentSession();
+      const total = (s && s.totalLaps) || Math.max(...rows.map((r) => r.laps.length));
+      stintChart(el, rows.map((r) => ({
+        label: r.driver.code,
+        color: teamColor(r.driver),
+        stints: r.stints,
+      })), total);
+    }
+
+    /* ---------- selected driver: stat cards + lap charts ---------- */
+    function renderDriverViews() {
+      const did = driverSel.value;
+      const mine = summarise().find((r) => String(r.driver.id) === String(did));
+      const sum = $('driver-summary');
+      if (!mine) {
+        sum.innerHTML = '';
+        showState($('chart-laptime'), 'This driver has no laps in this session.');
+        showState($('chart-position'), 'This driver has no laps in this session.');
+        return;
+      }
+      const race = isRace();
+      sum.innerHTML = `
+        <div class="stat"><div class="stat-label">${race ? 'Finish' : 'Grid slot'}</div><div class="stat-value">P${mine.finish ?? '—'}</div></div>
+        <div class="stat"><div class="stat-label">Best lap</div><div class="stat-value">${formatLapTime(mine.best)}</div></div>
+        ${race ? `<div class="stat"><div class="stat-label">Pit stops</div><div class="stat-value">${mine.stops}</div></div>
+        <div class="stat"><div class="stat-label">Avg clean lap</div><div class="stat-value">${formatLapTime(mine.avgClean == null ? null : Math.round(mine.avgClean))}</div></div>` : ''}`;
+
+      const color = teamColor(mine.driver);
+      const plotted = race ? mine.laps.filter((l) => !l.outlier) : mine.laps;
+      lineChart($('chart-laptime'), {
+        label: 'Lap time by lap',
+        series: [{
+          name: mine.driver.code, color, dots: true, gapX: 1.5,
+          points: plotted.map((l) => ({ x: l.lapNumber, y: l.lapTimeMs / 1000, c: COMPOUND_COLORS[l.compound] || color })),
+        }],
+        vlines: race ? mine.laps.filter((l) => l.pitLap).map((l) => ({ x: l.lapNumber, label: 'PIT' })) : [],
+        xLabel: 'Lap', xMin: 1, xMax: Math.max(2, mine.laps.length),
+        yFormat: formatSeconds, xTipFormat: (v) => 'Lap ' + v, height: 240, left: 74,
+      });
+
+      if (!race) {
+        showState($('chart-position'), 'Position-by-lap is shown for race sessions.');
+      } else {
+        const maxPos = Math.max(20, ...mine.laps.map((l) => l.position || 0));
+        lineChart($('chart-position'), {
+          label: 'Race position by lap',
+          series: [{ name: mine.driver.code, color, step: true,
+            points: mine.laps.map((l) => ({ x: l.lapNumber, y: l.position })) }],
+          invertY: true, yMin: 1, yMax: maxPos,
+          yTicks: [1, 5, 10, 15, maxPos].filter((v, i, a) => a.indexOf(v) === i),
+          yFormat: (v) => 'P' + Math.round(v), xTipFormat: (v) => 'Lap ' + v,
+          xLabel: 'Lap', xMin: 1, xMax: Math.max(2, mine.laps.length), height: 200,
+        });
       }
     }
 
-    async function loadLapTimes() {
-      const el = document.getElementById('laptimes');
-      showState(el, 'Loading…');
-      try {
-        const laps = await apiGet(`/sessions/${sessionSel.value}/laptimes`);
-        if (!laps.length) return showState(el, 'No lap times recorded for this session.');
-        el.innerHTML = `<table class="data-table"><thead><tr>
-          <th>Lap</th><th>Driver</th><th>Pos</th><th>Compound</th><th class="num">Time</th>
-          </tr></thead><tbody>${laps.map(l => `<tr>
-            <td class="num">${l.lapNumber}</td>
-            <td>${(l.driver && l.driver.code) || '—'}</td>
-            <td>${l.position ?? '-'}</td>
-            <td><span class="badge">${l.compound || '—'}</span></td>
-            <td class="num">${formatLapTime(l.lapTimeMs)}</td>
-          </tr>`).join('')}</tbody></table>`;
-      } catch (e) { showState(el, `Could not load lap times: ${e.message}`, true); }
-    }
-
-    async function loadTelemetry() {
-      const el = document.getElementById('telemetry');
-      if (!sessionSel.value || !driverSel.value) return;
-      showState(el, 'Loading…');
-      try {
-        const pts = await apiGet(`/sessions/${sessionSel.value}/telemetry?driverId=${driverSel.value}`);
-        if (!pts.length) return showState(el, 'No telemetry for this driver in this session.');
-        el.innerHTML = `<table class="data-table"><thead><tr>
-          <th>Lap</th><th class="num">Dist (m)</th><th class="num">Speed</th><th class="num">Throttle</th>
-          <th class="num">Brake</th><th class="num">Gear</th><th class="num">RPM</th>
-          </tr></thead><tbody>${pts.map(p => `<tr>
-            <td class="num">${p.lapNumber}</td>
-            <td class="num">${p.distanceM != null ? p.distanceM.toFixed(0) : '—'}</td>
-            <td class="num">${p.speedKph != null ? p.speedKph.toFixed(0) : '—'}</td>
-            <td class="num">${p.throttlePct != null ? p.throttlePct.toFixed(0) + '%' : '—'}</td>
-            <td class="num">${p.brake != null ? p.brake.toFixed(2) : '—'}</td>
-            <td class="num">${p.gear ?? '—'}</td>
-            <td class="num">${p.rpm ?? '—'}</td>
-          </tr>`).join('')}</tbody></table>`;
-      } catch (e) { showState(el, `Could not load telemetry: ${e.message}`, true); }
-    }
-
+    /* ---------- weather ---------- */
     async function loadWeather() {
-      const el = document.getElementById('weather-row');
+      const el = $('weather-row');
       try {
         const w = await apiGet(`/sessions/${sessionSel.value}/weather`);
         if (!w.length) { el.innerHTML = ''; return; }
@@ -180,6 +354,88 @@
           <div class="stat"><div class="stat-label">Humidity</div><div class="stat-value">${s.humidityPct ?? '—'}%</div></div>
           <div class="stat"><div class="stat-label">Wind</div><div class="stat-value">${s.windSpeedMs ?? '—'} m/s</div></div>`;
       } catch (e) { el.innerHTML = ''; }
+    }
+
+    /* ---------- telemetry ---------- */
+    async function fetchTelemetry(sid, did) {
+      const key = sid + ':' + did;
+      if (!telemetryCache[key]) telemetryCache[key] = await apiGet(`/sessions/${sid}/telemetry?driverId=${did}`);
+      return telemetryCache[key];
+    }
+
+    async function loadTelemetry() {
+      const sid = sessionSel.value, did = driverSel.value;
+      if (!sid || !did) return;
+      ['chart-speed', 'chart-throttle', 'chart-brake', 'chart-gear', 'chart-rpm'].forEach((id) => showState($(id), 'Loading…'));
+      try {
+        const pts = await fetchTelemetry(sid, did);
+        const laps = [...new Set(pts.map((p) => p.lapNumber))].sort((a, b) => a - b);
+        lapSel.innerHTML = laps.map((n) => `<option value="${n}">Lap ${n}</option>`).join('');
+        renderTelemetry();
+      } catch (e) {
+        ['chart-speed', 'chart-throttle', 'chart-brake', 'chart-gear', 'chart-rpm'].forEach((id) =>
+          showState($(id), `Could not load telemetry: ${escapeHtml(e.message)}`, true));
+      }
+    }
+
+    function lapPoints(pts, lap) {
+      return pts.filter((p) => p.lapNumber === lap).sort((a, b) => a.sampleIndex - b.sampleIndex);
+    }
+
+    async function renderTelemetry() {
+      const sid = sessionSel.value, did = driverSel.value;
+      const charts = ['chart-speed', 'chart-throttle', 'chart-brake', 'chart-gear', 'chart-rpm'];
+      let pts;
+      try { pts = await fetchTelemetry(sid, did); } catch (e) { return; }
+      const lap = Number(lapSel.value);
+      const A = lapPoints(pts, lap);
+      if (!A.length) {
+        charts.forEach((id) => showState($(id), 'No telemetry for this driver in this session.'));
+        $('telemetry').innerHTML = '';
+        return;
+      }
+      const dA = driverById(did);
+      const colorA = teamColor(dA);
+      const sets = [{ name: dA ? dA.code : 'Driver', color: colorA, pts: A }];
+
+      if (compareSel.value && compareSel.value !== did) {
+        try {
+          const other = await fetchTelemetry(sid, compareSel.value);
+          const lapsB = [...new Set(other.map((p) => p.lapNumber))].sort((a, b) => a - b);
+          const B = lapPoints(other, lapsB.includes(lap) ? lap : lapsB[0]);
+          const dB = driverById(compareSel.value);
+          if (B.length) {
+            const same = dB && dA && dB.team && dA.team && dB.team.id === dA.team.id;
+            sets.push({ name: dB ? dB.code : 'Compare', color: same ? '#ffffff' : teamColor(dB), pts: B, dash: true });
+          }
+        } catch (e) { /* comparison is optional */ }
+      }
+
+      const build = (field, extra) => sets.map((s) => Object.assign({
+        name: s.name, color: s.color, dash: s.dash,
+        points: s.pts.map((p) => ({ x: p.distanceM, y: p[field] })),
+      }, extra || {}));
+      const common = { xLabel: 'Distance around the lap', xFormat: (v) => (v / 1000).toFixed(1) + ' km',
+        xTipFormat: (v) => Math.round(v) + ' m', height: 190, xMin: 0, left: 80 };
+
+      lineChart($('chart-speed'),    Object.assign({ label: 'Speed', series: build('speedKph'), yFormat: (v) => Math.round(v) + ' km/h' }, common));
+      lineChart($('chart-throttle'), Object.assign({ label: 'Throttle', series: build('throttlePct'), yMin: 0, yMax: 100, yTicks: [0, 25, 50, 75, 100], yFormat: (v) => Math.round(v) + '%' }, common));
+      lineChart($('chart-brake'),    Object.assign({ label: 'Brake', series: build('brake', { step: true, area: true }), yMin: 0, yMax: 1, yTicks: [0, 1], yFormat: (v) => (v > 0.5 ? 'ON' : 'OFF') }, common));
+      lineChart($('chart-gear'),     Object.assign({ label: 'Gear', series: build('gear', { step: true }), yMin: 1, yMax: 8, yTicks: [1, 2, 3, 4, 5, 6, 7, 8], yFormat: (v) => 'G' + Math.round(v) }, common));
+      lineChart($('chart-rpm'),      Object.assign({ label: 'RPM', series: build('rpm'), yFormat: (v) => Math.round(v).toLocaleString() }, common));
+
+      $('telemetry').innerHTML = `<table class="data-table"><thead><tr>
+        <th>Lap</th><th class="num">Dist (m)</th><th class="num">Speed</th><th class="num">Throttle</th>
+        <th class="num">Brake</th><th class="num">Gear</th><th class="num">RPM</th>
+        </tr></thead><tbody>${A.map((p) => `<tr>
+          <td class="num">${p.lapNumber}</td>
+          <td class="num">${p.distanceM != null ? p.distanceM.toFixed(0) : '—'}</td>
+          <td class="num">${p.speedKph != null ? p.speedKph.toFixed(0) : '—'}</td>
+          <td class="num">${p.throttlePct != null ? p.throttlePct.toFixed(0) + '%' : '—'}</td>
+          <td class="num">${p.brake != null ? p.brake.toFixed(2) : '—'}</td>
+          <td class="num">${p.gear ?? '—'}</td>
+          <td class="num">${p.rpm ?? '—'}</td>
+        </tr>`).join('')}</tbody></table>`;
     }
 
     init();

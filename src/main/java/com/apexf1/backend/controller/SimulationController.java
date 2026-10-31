@@ -1,5 +1,6 @@
 package com.apexf1.backend.controller;
 
+import com.apexf1.backend.model.SimulationResult;
 import com.apexf1.backend.simulation.SimulationEngine;
 import com.apexf1.backend.simulation.dto.SimulationSnapshot;
 import org.springframework.web.bind.annotation.*;
@@ -12,6 +13,7 @@ import java.util.List;
  *  POST /api/simulations/race/{raceId}?laps=&timeScale=  → start a race sim
  *  GET  /api/simulations/{simId}                          → live snapshot (poll this)
  *  POST /api/simulations/{simId}/stop                     → stop a sim
+ *  GET  /api/simulations/results(/{id})                    → saved results of finished races
  *  GET  /api/simulations                                  → list all sims
  */
 @RestController
@@ -44,5 +46,15 @@ public class SimulationController {
     @GetMapping
     public List<SimulationSnapshot> list() {
         return engine.list();
+    }
+
+    @GetMapping("/results")
+    public List<SimulationResult> results() {
+        return engine.listResults();
+    }
+
+    @GetMapping("/results/{id}")
+    public SimulationResult result(@PathVariable Long id) {
+        return engine.getResult(id);
     }
 }

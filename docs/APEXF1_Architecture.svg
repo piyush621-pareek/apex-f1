@@ -50,7 +50,7 @@
 
   <!-- Arrow browser <-> backend -->
   <line x1="420" y1="410" x2="558" y2="410" stroke="#e10600" stroke-width="3" marker-end="url(#ah)" marker-start="url(#ah2)"/>
-  <text x="489" y="396" text-anchor="middle" font-size="13" font-weight="600" fill="#f0f0ee">HTTP · Fetch</text>
+  <text x="489" y="396" text-anchor="middle" font-size="13" font-weight="600" fill="#f0f0ee">HTTP + WebSocket</text>
   <text x="489" y="432" text-anchor="middle" font-size="12" fill="#9a9a9e">/api  (JSON)</text>
 
   <!-- ============ SPRING BOOT APP ============ -->
@@ -87,7 +87,7 @@
   <text x="920" y="356" font-size="13" fill="#f0f0ee">• Strategy pattern</text>
   <text x="920" y="380" font-size="13" fill="#f0f0ee">• Observer pattern</text>
   <text x="920" y="404" font-size="13" fill="#f0f0ee">• Singleton engine</text>
-  <text x="920" y="440" font-size="12" fill="#9a9a9e">Live snapshot polled</text>
+  <text x="920" y="440" font-size="12" fill="#9a9a9e">Live snapshot via WebSocket</text>
   <text x="920" y="458" font-size="12" fill="#9a9a9e">via REST</text>
 
   <!-- seed note -->

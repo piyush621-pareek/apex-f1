@@ -20,6 +20,7 @@
       <nav class="nav-links">
         <a href="dashboard.html" class="nav-link" data-page="dashboard">Dashboard</a>
         <a href="pitwall.html" class="nav-link" data-page="pitwall">Pit Wall</a>
+        <a href="race.html" class="nav-link" data-page="race">Race Sim</a>
         <a href="fsp.html" class="nav-link" data-page="fsp">FSP</a>
         <a href="manage.html" class="nav-link" data-page="manage">Manage</a>
       </nav>
@@ -107,7 +108,7 @@
         el.innerHTML = `<table class="data-table"><thead><tr>
           <th>Fan</th><th>Pole</th><th>Winner</th><th class="num">Accuracy</th><th></th>
           </tr></thead><tbody>${preds.map(p => `<tr>
-            <td>${p.fanName}</td>
+            <td>${escapeHtml(p.fanName)}</td>
             <td>${(p.predictedPoleDriver && p.predictedPoleDriver.code) || '—'}</td>
             <td>${(p.predictedWinnerDriver && p.predictedWinnerDriver.code) || '—'}</td>
             <td class="num">${p.scored && p.accuracyPct != null ? p.accuracyPct.toFixed(0) + '%' : '<span class="badge">pending</span>'}</td>
@@ -128,7 +129,7 @@
       if (p.predictedWinnerDriver) winnerSel.value = p.predictedWinnerDriver.id;
       submitBtn.textContent = 'Update Prediction';
       raceSel.disabled = true;   // a prediction stays with its race
-      formMsg.innerHTML = `<span class="text-secondary">Editing ${p.fanName}'s pick — <a href="#" onclick="cancelEdit();return false;">cancel</a></span>`;
+      formMsg.innerHTML = `<span class="text-secondary">Editing ${escapeHtml(p.fanName)}'s pick — <a href="#" onclick="cancelEdit();return false;">cancel</a></span>`;
     };
 
     window.cancelEdit = () => {

@@ -48,12 +48,16 @@
     <rect x="80" y="448" width="5" height="60" rx="2" fill="#e10600"/>
     <text x="100" y="476" font-size="16" font-weight="600" fill="#1a1a1f">Manage</text>
     <text x="100" y="496" font-size="12" fill="#6b6b70">CRUD admin: drivers · teams · races</text>
+    <rect x="80" y="518" width="320" height="60" rx="6" fill="#ffffff" stroke="#d0d0d5"/>
+    <rect x="80" y="518" width="5" height="60" rx="2" fill="#e10600"/>
+    <text x="100" y="546" font-size="16" font-weight="600" fill="#1a1a1f">Race Sim</text>
+    <text x="100" y="566" font-size="12" fill="#6b6b70">live cars on the circuit (WebSocket push)</text>
   </g>
-  <text x="240" y="540" text-anchor="middle" font-size="12" fill="#9a9a9e">4 pages · call the API with relative /api URLs</text>
+  <text x="240" y="612" text-anchor="middle" font-size="12" fill="#9a9a9e">5 pages · call the API with relative /api URLs</text>
 
   <!-- Arrow browser <-> backend -->
   <line x1="420" y1="410" x2="558" y2="410" stroke="#e10600" stroke-width="3" marker-end="url(#ah)" marker-start="url(#ah2)"/>
-  <text x="489" y="396" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a1f">HTTP · Fetch</text>
+  <text x="489" y="396" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a1f">HTTP + WebSocket</text>
   <text x="489" y="432" text-anchor="middle" font-size="12" fill="#6b6b70">/api  (JSON)</text>
 
   <!-- ============ SPRING BOOT APP ============ -->
@@ -90,13 +94,13 @@
   <text x="920" y="356" font-size="13" fill="#1a1a1f">• Strategy pattern</text>
   <text x="920" y="380" font-size="13" fill="#1a1a1f">• Observer pattern</text>
   <text x="920" y="404" font-size="13" fill="#1a1a1f">• Singleton engine</text>
-  <text x="920" y="440" font-size="12" fill="#6b6b70">Live snapshot polled</text>
-  <text x="920" y="458" font-size="12" fill="#6b6b70">via REST</text>
+  <text x="920" y="440" font-size="12" fill="#6b6b70">Results saved to</text>
+  <text x="920" y="458" font-size="12" fill="#6b6b70">MySQL on finish</text>
 
   <!-- seed note -->
   <rect x="588" y="512" width="544" height="70" rx="6" fill="#ffffff" stroke="#d0d0d5"/>
-  <text x="602" y="540" font-size="14" font-weight="600" fill="#1a1a1f">SeedDataRunner — loads full dataset on first run</text>
-  <text x="602" y="562" font-size="12" fill="#6b6b70">11 teams · 22 drivers · 8 circuits · 8 races · standings · telemetry</text>
+  <text x="602" y="540" font-size="14" font-weight="600" fill="#1a1a1f">SeedDataRunner — seeds 8 full race weekends on first run</text>
+  <text x="602" y="562" font-size="12" fill="#6b6b70">2026 grid · 16 sessions · ~10.5k laps · ~28k telemetry points</text>
 
   <text x="860" y="620" text-anchor="middle" font-size="12" fill="#9a9a9e">Java 17 · Spring Boot 3.3 · Lombok · Maven</text>
 
@@ -122,7 +126,9 @@
     <text x="1410" y="380">• driver_standings</text>
     <text x="1410" y="404">• team_standings</text>
     <text x="1410" y="428">• predictions</text>
-    <text x="1410" y="452" fill="#9a9a9e">11 tables</text>
+    <text x="1410" y="452">• simulation_results</text>
+    <text x="1270" y="476">• sim_result_entries</text>
+    <text x="1410" y="476" fill="#9a9a9e">13 tables</text>
   </g>
 
   <!-- footer legend -->

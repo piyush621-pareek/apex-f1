@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>APEX F1 — Race Sim</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body data-page="race">
+
+  <header class="navbar">
+    <div class="navbar-inner">
+      <a href="dashboard.html" class="brand">
+        <span class="brand-mark"></span>
+        <span class="brand-name">APEX<span class="brand-name-accent">F1</span></span>
+      </a>
+      <button class="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
+      <nav class="nav-links">
+        <a href="dashboard.html" class="nav-link" data-page="dashboard">Dashboard</a>
+        <a href="pitwall.html" class="nav-link" data-page="pitwall">Pit Wall</a>
+        <a href="race.html" class="nav-link" data-page="race">Race Sim</a>
+        <a href="fsp.html" class="nav-link" data-page="fsp">FSP</a>
+        <a href="manage.html" class="nav-link" data-page="manage">Manage</a>
+      </nav>
+      <div class="season-badge"><span class="season-dot"></span>2026 SEASON</div>
+    </div>
+  </header>
+
+  <main class="page-container">
+    <section class="panel">
+      <h1>Race Simulation</h1>
+      <p class="text-secondary">Starts the multithreaded simulation engine on the server (one thread per car) and streams real-time car telemetry over WebSocket (with automatic HTTP polling fallback).</p>
+      <div class="controls">
+        <div class="field">
+          <label for="race-select">Circuit / Race</label>
+          <select id="race-select"></select>
+        </div>
+        <div class="field">
+          <label for="laps-select">Laps</label>
+          <select id="laps-select">
+            <option value="0" id="full-laps-opt" selected>Full Race Distance</option>
+            <option value="5">5 laps (Sprint)</option>
+            <option value="10">10 laps</option>
+            <option value="20">20 laps</option>
+            <option value="35">35 laps</option>
+            <option value="50">50 laps</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="speed-select">Sim speed</label>
+          <select id="speed-select">
+            <option value="1">Real-Time (x1)</option>
+            <option value="2">Broadcast (x2)</option>
+            <option value="5" selected>Normal (x5)</option>
+            <option value="10">Fast (x10)</option>
+            <option value="20">Ultra Fast (x20)</option>
+          </select>
+        </div>
+        <button class="btn" id="start-btn" type="button">Start Race</button>
+        <button class="btn secondary" id="stop-btn" type="button" disabled>Stop</button>
+      </div>
+      <div id="sim-status" class="text-secondary mono">Pick a race and press Start.</div>
+    </section>
+
+    <div class="sim-layout">
+      <section class="panel">
+        <h2>Track</h2>
+        <div id="stage" class="sim-stage"><div class="state-msg">Loading track…</div></div>
+      </section>
+      <section class="panel">
+        <h2>Live Leaderboard</h2>
+        <div id="board"><div class="state-msg">Waiting for the race to start…</div></div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>APEX F1 — F1 Telemetry Analytics · 2026 Season</p>
+  </footer>
+
+  <script src="js/main.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/track.js"></script>
+  <script>
+    const POLL_MS = 250;           // how often we ask the server for the new state
+    const EXTRAPOLATE_MS = 600;    // max time we keep moving a car between two updates
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+
+    const raceSel = document.getElementById('race-select');
+    const lapsSel = document.getElementById('laps-select');
+    const speedSel = document.getElementById('speed-select');
+    const startBtn = document.getElementById('start-btn');
+    const stopBtn = document.getElementById('stop-btn');
+    const statusEl = document.getElementById('sim-status');
+    const stageEl = document.getElementById('stage');
+    const boardEl = document.getElementById('board');
+
+    let racesCache = [];
+    let track = null;        // { svg, path, parent, length, unit }
+    let carsLayer = null;    // <g> that holds every car marker
+    let sim = null;          // the running simulation (client side state)
+    let pollTimer = null;
+    let wsConn = null;       // live WebSocket telemetry stream
+    let wsActive = false;
+    let selectedCode = null;
+
+    const COMPOUND_COLORS = { SOFT: '#ff4d4d', MEDIUM: '#f5c518', HARD: '#e8e8e8', INTERMEDIATE: '#3ec16d', WET: '#3d8bff' };
+
+    /* ---------- setup ---------- */
+    async function init() {
+      try {
+        racesCache = await apiGet(`/races?season=${SEASON}`);
+        raceSel.innerHTML = racesCache.map((r) =>
+          `<option value="${r.id}">R${r.round} — ${escapeHtml(r.name)}</option>`).join('');
+        raceSel.onchange = async () => { await stopSim(true); showTrack(); };
+        startBtn.onclick = startSim;
+        stopBtn.onclick = () => stopSim(true);
+        if (racesCache.length) showTrack();
+      } catch (e) {
+        showState(stageEl, `Could not load races: ${escapeHtml(e.message)}`, true);
+      }
+      requestAnimationFrame(frame);
+    }
+
+    async function showTrack() {
+      const race = racesCache.find((r) => String(r.id) === String(raceSel.value));
+      const c = (race && race.circuit) || {};
+      const url = c.mapImageUrl || null;
+      const fullOpt = document.getElementById('full-laps-opt');
+      if (fullOpt) {
+        fullOpt.textContent = c.totalLaps ? `Full Race (${c.totalLaps} laps)` : 'Full Race Distance';
+      }
+      track = null; carsLayer = null;
+      showState(stageEl, 'Loading track…');
+      try {
+        track = await mountTrack(stageEl, url);
+        carsLayer = document.createElementNS(SVG_NS, 'g');
+        track.parent.appendChild(carsLayer);
+        boardEl.innerHTML = '<div class="state-msg">Waiting for the race to start…</div>';
+        statusEl.textContent = `${c.name || (race && race.name) || 'Circuit'} · ${c.lengthKm ?? 5.0} km · ${c.totalLaps ?? 50} laps — press Start.`;
+      } catch (e) {
+        showState(stageEl, `Could not load the track map (${escapeHtml(e.message)}).`, true);
+      }
+    }
+
+    /* ---------- start / stop ---------- */
+    async function startSim() {
+      if (!track) return;
+      await stopSim(false);
+      startBtn.disabled = true;
+      try {
+        const snap = await apiPost(
+          `/simulations/race/${raceSel.value}?laps=${lapsSel.value}&timeScale=${speedSel.value}`, {});
+        beginSim(snap);
+      } catch (e) {
+        statusEl.textContent = `Could not start the simulation: ${e.message}`;
+        startBtn.disabled = false;
+      }
+    }
+
+    function closeWs() {
+      wsActive = false;
+      if (wsConn) {
+        try { wsConn.onclose = null; wsConn.close(); } catch (_) {}
+        wsConn = null;
+      }
+    }
+
+    async function stopSim(callServer) {
+      closeWs();
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (sim && callServer && sim.status === 'RUNNING') {
+        try { await apiPost(`/simulations/${sim.id}/stop`, {}); } catch (e) { /* already finished */ }
+      }
+      if (callServer && carsLayer) carsLayer.innerHTML = '';
+      if (callServer) {
+        if (sim) statusEl.textContent = 'Simulation stopped.';
+        sim = null; boardEl.innerHTML = '<div class="state-msg">Waiting for the race to start…</div>';
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+
+    function connectWebSocket(simId) {
+      closeWs();
+      try {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${proto}//${location.host}/ws/simulations?simId=${simId}`);
+        wsConn = ws;
+        ws.onopen = () => { wsActive = true; };
+        ws.onmessage = (ev) => {
+          if (!sim) return;
+          try {
+            const snap = JSON.parse(ev.data);
+            if (snap && snap.simulationId === sim.id) {
+              applySnapshot(snap);
+              if (snap.status !== 'RUNNING') {
+                closeWs();
+                if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+                startBtn.disabled = false; stopBtn.disabled = true;
+              }
+            }
+          } catch (_) {}
+        };
+        ws.onerror = () => { wsActive = false; };
+        ws.onclose = () => { wsActive = false; };
+      } catch (_) {
+        wsActive = false;
+      }
+    }
+
+    function beginSim(snap) {
+      carsLayer.innerHTML = '';
+      sim = {
+        id: snap.simulationId, lapLen: snap.lapLengthM, totalLaps: snap.totalLaps,
+        status: snap.status, cars: new Map(), leaderDist: 0,
+      };
+      const r = 7 * track.unit;
+      snap.cars.forEach((c, idx) => {
+        const g = document.createElementNS(SVG_NS, 'g');
+        g.setAttribute('class', 'car');
+        const dot = document.createElementNS(SVG_NS, 'circle');
+        dot.setAttribute('r', r);
+        dot.setAttribute('fill', c.teamColor || '#888');
+        const label = document.createElementNS(SVG_NS, 'text');
+        label.setAttribute('class', 'car-label');
+        label.setAttribute('y', -r - 3 * track.unit);
+        label.setAttribute('font-size', 10 * track.unit);
+        label.textContent = c.driverCode;
+        const tip = document.createElementNS(SVG_NS, 'title');
+        tip.textContent = `${c.driverName} · ${c.teamName}`;
+        g.appendChild(tip); g.appendChild(dot); g.appendChild(label);
+        carsLayer.appendChild(g);
+        sim.cars.set(c.driverCode, { g, dot, label, startIdx: idx, dist: 0, t: 0, v: 0, finished: false });
+      });
+      applySnapshot(snap);
+      stopBtn.disabled = false;
+      connectWebSocket(snap.simulationId);
+      // Fallback poll only fires if WebSocket is not actively pushing frames
+      pollTimer = setInterval(() => { if (!wsActive) poll(); }, POLL_MS);
+    }
+
+    let polling = false;
+    async function poll() {
+      if (!sim || polling) return;
+      polling = true;
+      try {
+        const snap = await apiGet(`/simulations/${sim.id}`);
+        applySnapshot(snap);
+        if (snap.status !== 'RUNNING') {
+          clearInterval(pollTimer); pollTimer = null;
+          startBtn.disabled = false; stopBtn.disabled = true;
+        }
+      } catch (e) {
+        statusEl.textContent = `Lost connection to the simulation: ${e.message}`;
+      } finally { polling = false; }
+    }
+
+    /* ---------- state from the server ---------- */
+    function applySnapshot(snap) {
+      const now = performance.now();
+      sim.status = snap.status;
+      sim.leaderDist = 0;
+      snap.cars.forEach((c) => {
+        const car = sim.cars.get(c.driverCode);
+        if (!car) return;
+        if (car.t) car.v = Math.max(0, (c.totalDistanceM - car.dist) / (now - car.t));   // metres per ms
+        car.dist = c.totalDistanceM;
+        car.t = now;
+        car.finished = c.finished;
+        car.position = c.position;
+        sim.leaderDist = Math.max(sim.leaderDist, c.totalDistanceM);
+      });
+      const lap = Math.min(snap.leaderLap || 1, snap.totalLaps);
+      const transport = wsActive ? 'LIVE WS' : 'POLL';
+      statusEl.textContent = `Lap ${lap}/${snap.totalLaps} · ${snap.status} (${transport})` +
+        (snap.status === 'FINISHED' && snap.cars[0] ? ` · winner ${snap.cars[0].driverName}` : '');
+      renderBoard(snap);
+    }
+
+    function renderBoard(snap) {
+      boardEl.innerHTML = `<table class="data-table board"><thead><tr>
+        <th>Pos</th><th>Driver</th><th>Tyre</th><th class="num">Last lap</th><th class="num">Speed</th><th class="num">Gap</th>
+        </tr></thead><tbody>${snap.cars.map((c, i) => {
+          const gap = i === 0 ? 'Leader' : (c.speedKph > 1 ? '+' + (c.gapToLeaderM / (c.speedKph / 3.6)).toFixed(1) + 's' : '+' + Math.round(c.gapToLeaderM) + ' m');
+          return `<tr data-code="${escapeHtml(c.driverCode)}" class="${c.driverCode === selectedCode ? 'row-selected' : ''}">
+            <td><span class="pos ${i === 0 ? 'p1' : ''}">${c.position}</span></td>
+            <td><span class="team-dot" style="background:${escapeHtml(c.teamColor || '#888')}"></span>${escapeHtml(c.driverCode)}</td>
+            <td><span class="cmp-dot" style="background:${COMPOUND_COLORS[c.compound] || '#888'}"></span> <span class="text-muted">${c.tyreAgeLaps}L</span></td>
+            <td class="num">${c.lastLapTimeMs ? formatLapTime(c.lastLapTimeMs) : '—'}</td>
+            <td class="num">${c.finished ? 'FIN' : Math.round(c.speedKph)}</td>
+            <td class="num">${gap}</td>
+          </tr>`;
+        }).join('')}</tbody></table>`;
+      boardEl.querySelectorAll('tr[data-code]').forEach((tr) => {
+        tr.onclick = () => { selectedCode = selectedCode === tr.dataset.code ? null : tr.dataset.code; renderBoard(snap); };
+      });
+    }
+
+    /* ---------- animation: runs every screen refresh ---------- */
+    function frame(now) {
+      if (sim && track) {
+        const fade = Math.max(0, 1 - sim.leaderDist / sim.lapLen);   // spread the starting grid out over lap 1
+        sim.cars.forEach((car, code) => {
+          let d = car.dist;
+          if (sim.status === 'RUNNING' && !car.finished) d += car.v * Math.min(now - car.t, EXTRAPOLATE_MS);
+          d -= car.startIdx * 9 * fade;                                // grid slot (metres behind the line)
+          const frac = ((d % sim.lapLen) + sim.lapLen) % sim.lapLen / sim.lapLen;
+          const pt = track.path.getPointAtLength(frac * track.length);
+          car.g.setAttribute('transform', `translate(${pt.x.toFixed(1)} ${pt.y.toFixed(1)})`);
+          const sel = code === selectedCode;
+          car.dot.setAttribute('stroke', sel ? '#00d4a0' : '#ffffff');
+          car.dot.setAttribute('stroke-width', (sel ? 3 : 1.3) * track.unit);
+          car.label.style.opacity = (sel || (car.position && car.position <= 3)) ? 1 : 0;
+          if (sel || (car.position && car.position <= 3)) car.g.parentNode.appendChild(car.g);   // draw on top
+        });
+      }
+      requestAnimationFrame(frame);
+    }
+
+    init();
+  </script>
+</body>
+</html>

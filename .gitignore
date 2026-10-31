@@ -16,3 +16,5 @@ Thumbs.db
 
 # ===== Node (doc generator, if ever copied in) =====
 node_modules/
+
+src/main/resources/application-local.properties

@@ -5,8 +5,8 @@ import java.util.Random;
 /**
  * The unit of concurrency: ONE thread runs ONE car for the whole race.
  * Every {@code TICK_MS} it asks its {@link PaceStrategy} for a speed, moves
- * the car forward, handles lap completion, and notifies observers — until the
- * car finishes the race or the simulation is stopped.
+ * the car forward, interpolates exact finish-line crossing timestamps to the
+ * millisecond, handles staggered pit stops, and notifies observers.
  */
 public class CarRunner implements Runnable {
 
@@ -35,6 +35,7 @@ public class CarRunner implements Runnable {
 
                 // model time elapsed this tick = real tick * time compression
                 double dtModelSec = (TICK_MS / 1000.0) * sim.getTimeScale();
+                double dtModelMs = dtModelSec * 1000.0;
 
                 double speedKph = strategy.speedKph(state, rnd);
                 state.setSpeedKph(speedKph);
@@ -42,21 +43,45 @@ public class CarRunner implements Runnable {
                 double metres = (speedKph / 3.6) * dtModelSec;
                 lapDistanceM += metres;
                 state.addDistance(metres);
-                state.addLapModelMs((long) (dtModelSec * 1000));
 
-                if (lapDistanceM >= sim.getLapLengthM()) {
-                    lapDistanceM -= sim.getLapLengthM();
-                    state.completeLap();
+                double lapLen = sim.getLapLengthM();
+                if (lapDistanceM >= lapLen && metres > 0.0) {
+                    double overshootM = lapDistanceM - lapLen;
+                    double fractionBeforeLine = Math.max(0.0, Math.min(1.0, (metres - overshootM) / metres));
+                    double timeBeforeLineMs = dtModelMs * fractionBeforeLine;
+                    double timeAfterLineMs = dtModelMs - timeBeforeLineMs;
+
+                    // Small per-driver, per-lap millisecond variance so lap times have realistic .xxx precision
+                    double jitterMs = (rnd.nextDouble() - 0.5) * 130.0
+                            + ((state.getDriverId() * 37L + state.getCurrentLap() * 13L) % 29L - 14L) * 4.3;
+
+                    lapDistanceM -= lapLen;
+                    if (lapDistanceM >= lapLen) {
+                        lapDistanceM = lapDistanceM % lapLen;
+                    }
+
+                    state.completeLap(timeBeforeLineMs, timeAfterLineMs, jitterMs);
+
+                    // Complete pit stop if the car pitted on the lap just finished
+                    if (state.isPittingThisLap()) {
+                        state.fitTyres(state.getNextCompound());
+                        state.setPittingThisLap(false);
+                    }
+
+                    // Enter pit window on the car's scheduled pit lap
+                    if (state.getCurrentLap() == state.getPlannedPitLap()
+                            && state.getCurrentLap() < sim.getTotalLaps()) {
+                        state.setPittingThisLap(true);
+                    }
+
                     sim.notifyLap(state);
 
-                    // Simple strategy hook: one stop near half distance.
-                    if (state.getCurrentLap() == sim.getTotalLaps() / 2) {
-                        state.fitTyres("HARD");
-                    }
                     if (state.getCurrentLap() > sim.getTotalLaps()) {
                         state.setFinished(true);
                         state.setSpeedKph(0.0);
                     }
+                } else {
+                    state.addLapModelMs(dtModelMs);
                 }
 
                 sim.notifyTick(state);
